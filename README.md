@@ -55,4 +55,38 @@ By the end, you'll be equipped to incorporate Epydemix into research and operati
 
 ## Quick Links
 
+- [Installation Guides](installation/)
+- [Session 1: Theory Behind Epydemix](sessions/session-1/)
+- [Session 2: Epydemix Simulation Platform](sessions/session-2/)
+- [Session 3: Python Package & R Interface](sessions/session-3/)
+- [Session 4: Tutorials and Exercises I](sessions/session-4/)
+- [Session 5: Forecast Pipeline and Application](sessions/session-5/)
+- [Session 6: Forecast Visualization & Performance](sessions/session-6/)
+
+
 ## Resources
+
+- [Epydemix Website](https://www.epydemix.org/)
+- [Epydemix Documentation](https://epydemix.readthedocs.io/en/latest/)
+- [EpyScenario Platform](https://scenario.epydemix.org/)
+
+### Citing Epydemix
+
+If you use Epydemix in your work, please cite:
+
+```bibtex
+@article{gozzi2025epydemix,
+  title={Epydemix: An open-source Python package for epidemic modeling with integrated approximate Bayesian calibration},
+  author={Gozzi, Nicol{\'o} and Chinazzi, Matteo and Davis, Jessica T and Gioannini, Corrado and Rossi, Luca and Ajelli, Marco and Perra, Nicola and Vespignani, Alessandro},
+  journal={PLOS Computational Biology},
+  volume={21},
+  number={11},
+  pages={e1013735},
+  year={2025},
+  publisher={Public Library of Science San Francisco, CA USA}
+}
+```
+
+## Contact
+
+For questions or issues, please open an issue on [GitHub](https://github.com/epistorm/epydemix/issues) or contact the maintainer at epydemix@isi.it.
