@@ -171,9 +171,15 @@ def simulate_wrapper(parameters):
 
 ---
 
+## Solutions
+
+Solutions are available in three formats (Python, R Colab, R Local). See the [solutions/](solutions/) folder.
+
+---
+
 ## Resources
 
 - [Epydemix Documentation](https://epydemix.readthedocs.io/)
 - [Supported Geographies](https://github.com/epistorm/epydemix-data/blob/main/locations.csv)
-- [Session 3 Tutorial 1: Modeling](../session-3/01_epydemix_python_tutorial.ipynb)
-- [Session 3 Tutorial 2: Calibration](../session-3/02_epydemix_calibration_tutorial.ipynb)
+- [Session 3 Tutorial 1: Modeling](../session-3/python/01_modeling_tutorial.ipynb)
+- [Session 3 Tutorial 2: Calibration](../session-3/python/02_calibration_tutorial.ipynb)

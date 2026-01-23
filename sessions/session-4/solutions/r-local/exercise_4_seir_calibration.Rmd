@@ -1,0 +1,366 @@
+---
+title: "Exercise 4 Solution: SEIR Calibration and Projection"
+subtitle: "Session 4 - Exercise Solutions"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Prerequisites
+
+```{r load-reticulate}
+library(reticulate)
+library(readr)
+library(ggplot2)
+library(dplyr)
+
+# Option A: Use a conda environment
+# use_condaenv("epydemix-workshop")
+
+# Option B: Use system Python
+# use_python("/usr/bin/python3")
+
+# Import epydemix modules
+epydemix <- import("epydemix")
+EpiModel <- epydemix$EpiModel
+builtins <- import_builtins()
+np <- import("numpy")
+utils_module <- import("epydemix.utils")
+compute_simulation_dates <- utils_module$compute_simulation_dates
+```
+
+---
+
+## 1. Load and Prepare Data
+
+```{r load-data}
+# Load incidence data
+data <- read_csv(
+  "https://raw.githubusercontent.com/epistorm/epydemix/refs/heads/main/tutorials/data/incidence_data.csv",
+  show_col_types = FALSE
+)
+data <- data %>% mutate(date = as.Date(date))
+
+# Split: first 80 days for calibration, rest for validation
+calibration_days <- 80
+data_calibration <- data[1:calibration_days, ]
+data_validation <- data[(calibration_days + 1):nrow(data), ]
+
+cat(sprintf("Calibration period: %s to %s (%d days)\n",
+            data_calibration$date[1], data_calibration$date[nrow(data_calibration)],
+            nrow(data_calibration)))
+cat(sprintf("Validation period: %s to %s (%d days)\n",
+            data_validation$date[1], data_validation$date[nrow(data_validation)],
+            nrow(data_validation)))
+```
+
+```{r viz-data, fig.width=10, fig.height=4}
+ggplot() +
+  geom_point(data = data_calibration, aes(x = date, y = data), color = "black", size = 1.5) +
+  geom_point(data = data_validation, aes(x = date, y = data), color = "gray", alpha = 0.5, size = 1.5) +
+  geom_vline(xintercept = as.numeric(data_calibration$date[nrow(data_calibration)]),
+             color = "red", linetype = "dashed", alpha = 0.5) +
+  labs(x = "Date", y = "New Infections", title = "Incidence Data: Calibration vs Validation Split") +
+  theme_minimal()
+```
+
+---
+
+## 2. Set Up the SEIR Model
+
+```{r setup-model}
+# Create SEIR model
+model <- EpiModel(name = "SEIR", compartments = c("S", "E", "I", "R"))
+
+params_SE <- builtins$tuple(list("beta", "I"))
+model$add_transition(source = "S", target = "E", params = params_SE, kind = "mediated")
+model$add_transition(source = "E", target = "I", params = "sigma", kind = "spontaneous")
+model$add_transition(source = "I", target = "R", params = "gamma", kind = "spontaneous")
+
+model$add_parameter("beta", 0.02)
+model$add_parameter("sigma", 0.2)
+model$add_parameter("gamma", 0.15)
+
+# Load Indonesia population
+model$import_epydemix_population(population_name = "Indonesia")
+model
+```
+
+```{r setup-params}
+# Initial conditions: 0.05% of population infected
+Nk_r <- py_to_r(model$population$Nk)
+infected <- as.integer(Nk_r * 0.05 / 100)
+exposed <- rep(0L, length(Nk_r))
+susceptible <- as.integer(Nk_r - infected)
+recovered <- rep(0L, length(Nk_r))
+
+initial_conditions <- reticulate::dict(
+  S = susceptible,
+  E = exposed,
+  I = infected,
+  R = recovered
+)
+
+# Date strings
+start_date_chr <- as.character(data_calibration$date[1])
+end_date_calibration_chr <- as.character(data_calibration$date[nrow(data_calibration)])
+end_date_validation_chr <- as.character(data_validation$date[nrow(data_validation)])
+
+# Parameters dict for calibration
+parameters <- reticulate::dict(
+  initial_conditions_dict = initial_conditions,
+  epimodel = model,
+  start_date = start_date_chr,
+  end_date = end_date_calibration_chr
+)
+
+# Compute simulation dates
+simulation_dates_calibration <- compute_simulation_dates(
+  start_date = start_date_chr,
+  end_date = end_date_calibration_chr
+)
+simulation_dates_full <- compute_simulation_dates(
+  start_date = start_date_chr,
+  end_date = end_date_validation_chr
+)
+```
+
+---
+
+## 3. Define Priors and Calibration Wrapper
+
+```{r define-priors}
+# Import scipy.stats for priors
+scipy_stats <- import("scipy.stats")
+
+# Define priors
+priors <- reticulate::dict(
+  beta = scipy_stats$uniform(loc = 0.01, scale = 0.02),    # U(0.01, 0.03)
+  sigma = scipy_stats$uniform(loc = 0.1, scale = 0.2),     # U(0.1, 0.3)
+  gamma = scipy_stats$uniform(loc = 0.1, scale = 0.1)      # U(0.1, 0.2)
+)
+```
+
+```{r define-wrapper}
+# Import calibration module
+calib <- import("epydemix.calibration")
+ABCSampler <- calib$ABCSampler
+rmse <- calib$rmse
+
+# Define the wrapper function in Python (required for ABCSampler)
+py_run_string("
+from epydemix import simulate
+
+def simulate_wrapper(parameters):
+    results = simulate(**parameters)
+    return {'data': results.transitions['S_to_E_total']}
+")
+
+simulate_wrapper <- py$simulate_wrapper
+
+# Initialize the ABC sampler
+abc_sampler <- ABCSampler(
+  simulation_function = simulate_wrapper,
+  priors = priors,
+  parameters = parameters,
+  observed_data = data_calibration$data,
+  distance_function = rmse
+)
+```
+
+---
+
+## 4. Run Calibration
+
+```{r run-calibration}
+# Run ABC-SMC calibration
+results_seir <- abc_sampler$calibrate(
+  strategy = "smc",
+  num_particles = 100L,
+  num_generations = 5L
+)
+```
+
+### Visualize Posterior Distributions
+
+```{r viz-posteriors}
+viz <- import("epydemix.visualization")
+plot_posterior_distribution <- viz$plot_posterior_distribution
+plot_quantiles <- viz$plot_quantiles
+
+# Get posterior
+posterior <- results_seir$get_posterior_distribution()
+
+# Plot marginal posteriors
+plot_posterior_distribution(posterior, "beta", kind = "kde", title = "Transmission Rate")
+plot_posterior_distribution(posterior, "sigma", kind = "kde", title = "Latent Rate")
+plot_posterior_distribution(posterior, "gamma", kind = "kde", title = "Recovery Rate")
+```
+
+```{r print-posteriors}
+# Print posterior summaries
+posterior_r <- py_to_r(posterior)
+cat("Posterior parameter estimates (median [IQR]):\n")
+for (param in c("beta", "sigma", "gamma")) {
+  values <- posterior_r[[param]]
+  cat(sprintf("  %s: %.4f [%.4f, %.4f]\n", param,
+              median(values), quantile(values, 0.25), quantile(values, 0.75)))
+}
+
+# Derived quantities
+cat("\nDerived quantities:\n")
+latent_period <- 1 / posterior_r[["sigma"]]
+infectious_period <- 1 / posterior_r[["gamma"]]
+cat(sprintf("  Latent period: %.1f days [%.1f, %.1f]\n",
+            median(latent_period), quantile(latent_period, 0.25), quantile(latent_period, 0.75)))
+cat(sprintf("  Infectious period: %.1f days [%.1f, %.1f]\n",
+            median(infectious_period), quantile(infectious_period, 0.25), quantile(infectious_period, 0.75)))
+```
+
+---
+
+## 5. Run Projections
+
+```{r run-projections}
+# Create projection parameters (extend to validation period)
+projection_parameters <- reticulate::dict(
+  initial_conditions_dict = initial_conditions,
+  epimodel = model,
+  start_date = start_date_chr,
+  end_date = end_date_validation_chr
+)
+
+# Run projections
+results_with_projections <- abc_sampler$run_projections(projection_parameters)
+```
+
+```{r viz-projections}
+# Get quantiles
+df_calibration <- results_with_projections$get_calibration_quantiles(simulation_dates_calibration)
+df_projection <- results_with_projections$get_projection_quantiles(simulation_dates_full)
+
+sns <- import("seaborn")
+colors <- py_to_r(sns$color_palette("Dark2"))
+
+# Plot calibration fit
+ax <- plot_quantiles(df_calibration, columns = "data",
+                     colors = colors[[2]], show_data = FALSE, labels = list("Calibration fit"))
+ax <- plot_quantiles(df_projection, columns = "data",
+                     colors = colors[[1]], show_data = FALSE, labels = list("Projection"), ax = ax)
+
+# Add observed data
+ax$plot(as.character(data_calibration$date), data_calibration$data,
+        "ko", markersize = 4L, label = "Calibration data")
+ax$plot(as.character(data_validation$date), data_validation$data,
+        "o", color = "gray", markersize = 4L, alpha = 0.6, label = "Validation data")
+
+ax$axvline(as.character(data_calibration$date[nrow(data_calibration)]),
+           color = "red", linestyle = "--", alpha = 0.5)
+
+ax$set_ylabel("New Infections")
+ax$set_title("SEIR Model: Calibration and Projection")
+ax$legend(loc = "upper right")
+ax
+```
+
+---
+
+## 6. Bonus: Compare SEIR to SIR Calibration
+
+```{r calibrate-sir}
+# Load predefined SIR model
+load_predefined_model <- epydemix$load_predefined_model
+model_sir <- load_predefined_model("SIR")
+model_sir$import_epydemix_population(population_name = "Indonesia")
+
+# Initial conditions for SIR
+Nk_sir <- py_to_r(model_sir$population$Nk)
+initial_conditions_sir <- reticulate::dict(
+  Susceptible = as.integer(Nk_sir - as.integer(Nk_sir * 0.05 / 100)),
+  Infected = as.integer(Nk_sir * 0.05 / 100),
+  Recovered = rep(0L, length(Nk_sir))
+)
+
+parameters_sir <- reticulate::dict(
+  initial_conditions_dict = initial_conditions_sir,
+  epimodel = model_sir,
+  start_date = start_date_chr,
+  end_date = end_date_calibration_chr
+)
+
+# SIR priors
+priors_sir <- reticulate::dict(
+  transmission_rate = scipy_stats$uniform(loc = 0.01, scale = 0.02),
+  recovery_rate = scipy_stats$uniform(loc = 0.1, scale = 0.15)
+)
+
+# SIR wrapper
+py_run_string("
+def simulate_wrapper_sir(parameters):
+    results = simulate(**parameters)
+    return {'data': results.transitions['Susceptible_to_Infected_total']}
+")
+
+abc_sampler_sir <- ABCSampler(
+  simulation_function = py$simulate_wrapper_sir,
+  priors = priors_sir,
+  parameters = parameters_sir,
+  observed_data = data_calibration$data,
+  distance_function = rmse
+)
+
+# Calibrate
+results_sir <- abc_sampler_sir$calibrate(
+  strategy = "smc",
+  num_particles = 100L,
+  num_generations = 5L
+)
+```
+
+```{r compare-distances}
+# Compare distance distributions
+plot_distance_distribution <- viz$plot_distance_distribution
+
+ax <- plot_distance_distribution(results_seir$get_distances(),
+                                  kind = "kde", color = colors[[1]], label = "SEIR", xlabel = "RMSE")
+ax <- plot_distance_distribution(results_sir$get_distances(),
+                                  kind = "kde", color = colors[[2]], label = "SIR", xlabel = "RMSE", ax = ax)
+ax$set_title("Calibration Performance: SEIR vs SIR")
+ax$legend()
+ax
+
+cat(sprintf("Median RMSE - SEIR: %.0f\n", median(py_to_r(results_seir$get_distances()))))
+cat(sprintf("Median RMSE - SIR: %.0f\n", median(py_to_r(results_sir$get_distances()))))
+```
+
+---
+
+## Discussion
+
+**How do the posterior distributions compare?**
+
+- The SEIR model has an additional parameter (sigma, the latent rate) that the SIR model lacks
+- This gives SEIR more flexibility to capture the delay between infection and becoming infectious
+- The SEIR beta estimate may differ from SIR because it accounts for the latent period
+
+**Does adding the E compartment improve the fit?**
+
+The improvement depends on:
+
+1. **The disease:** If there's a significant latent period, SEIR is more appropriate
+2. **The data:** The original data was generated from an SIR model, so SIR may fit equally well
+3. **Model complexity:** SEIR has more parameters, which could lead to overfitting
+
+**Key takeaways:**
+
+- Model selection should be guided by biological plausibility, not just fit
+- More complex models require more data to constrain
+- The latent period matters for forecasting timing of epidemic waves
+- Validation on held-out data is essential for assessing projection accuracy

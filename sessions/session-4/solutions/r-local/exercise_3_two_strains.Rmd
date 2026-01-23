@@ -1,0 +1,324 @@
+---
+title: "Exercise 3 Solution: Two-Strain Model"
+subtitle: "Session 4 - Exercise Solutions"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Prerequisites
+
+```{r load-reticulate}
+library(reticulate)
+
+# Option A: Use a conda environment
+# use_condaenv("epydemix-workshop")
+
+# Option B: Use system Python
+# use_python("/usr/bin/python3")
+
+# Import epydemix
+epydemix <- import("epydemix")
+EpiModel <- epydemix$EpiModel
+builtins <- import_builtins()
+np <- import("numpy")
+viz <- import("epydemix.visualization")
+plot_quantiles <- viz$plot_quantiles
+```
+
+---
+
+## Model Structure
+
+We model two strains where strain 2 is more transmissible:
+
+**Compartments:** S, I1, I2, R1, R2
+
+**Transitions:**
+
+- S + I1 -> 2I1 (rate beta)
+- S + I2 -> 2I2 (rate beta * psi, where psi > 1)
+- R1 + I2 -> I2 + R2 (rate beta * psi * gamma, partial cross-immunity)
+- I1 -> R1 (rate mu)
+- I2 -> R2 (rate mu)
+
+---
+
+## Task 1: Implement the Two-Strain Model
+
+```{r create-model}
+# Function to create a two-strain model
+create_two_strain_model <- function(psi = 1.5, gamma_val = 0.4, beta = 0.20, mu = 0.1) {
+  model <- EpiModel(name = "Two-Strain SIR", compartments = c("S", "I1", "I2", "R1", "R2"))
+
+  # S + I1 -> 2I1
+  params_S_I1 <- builtins$tuple(list("beta", "I1"))
+  model$add_transition(source = "S", target = "I1", kind = "mediated", params = params_S_I1)
+
+  # S + I2 -> 2I2 (more transmissible)
+  params_S_I2 <- builtins$tuple(list("beta*psi", "I2"))
+  model$add_transition(source = "S", target = "I2", kind = "mediated", params = params_S_I2)
+
+  # R1 + I2 -> I2 + R2 (reinfection)
+  params_R1_I2 <- builtins$tuple(list("beta*psi*gamma", "I2"))
+  model$add_transition(source = "R1", target = "I2", kind = "mediated", params = params_R1_I2)
+
+  # I1 -> R1
+  model$add_transition(source = "I1", target = "R1", kind = "spontaneous", params = "mu1")
+
+  # I2 -> R2
+  model$add_transition(source = "I2", target = "R2", kind = "spontaneous", params = "mu2")
+
+  # Set parameters
+  model$add_parameter("beta", beta)
+  model$add_parameter("psi", psi)
+  model$add_parameter("gamma", gamma_val)
+  model$add_parameter("mu1", mu)
+  model$add_parameter("mu2", mu)
+
+  return(model)
+}
+
+# Create the model
+model <- create_two_strain_model(psi = 1.5, gamma_val = 0.4)
+model
+```
+
+---
+
+## Task 2: Delay Strain 2 Emergence
+
+We use `override_parameter` to set psi=0 and mu2=0 for the first 30 days,
+effectively turning off strain 2 transmission and recovery.
+
+```{r delay-emergence}
+model$override_parameter(
+  start_date = "2025-01-01",
+  end_date = "2025-01-31",
+  parameter_name = "psi",
+  value = 0.0
+)
+
+model$override_parameter(
+  start_date = "2025-01-01",
+  end_date = "2025-01-31",
+  parameter_name = "mu2",
+  value = 0.0
+)
+```
+
+---
+
+## Task 3: Simulate and Visualize
+
+```{r run-simulation}
+# Get default population Nk
+Nk_val <- py_to_r(model$population$Nk)
+
+# Initial conditions
+initial_conditions <- reticulate::dict(
+  S = np$array(as.integer(Nk_val - 20)),
+  I1 = np$array(as.integer(10)),
+  I2 = np$array(as.integer(10)),
+  R1 = np$array(as.integer(0)),
+  R2 = np$array(as.integer(0))
+)
+
+# Run 50 simulations over 6 months
+results <- model$run_simulations(
+  start_date = "2025-01-01",
+  end_date = "2025-07-31",
+  Nsim = 50L,
+  initial_conditions_dict = initial_conditions
+)
+```
+
+```{r viz-strains}
+df_quantiles <- results$get_quantiles_compartments()
+
+sns <- import("seaborn")
+colors <- py_to_r(sns$color_palette("Dark2"))
+
+# Plot both strains
+ax <- plot_quantiles(df_quantiles, columns = c("I1_total"),
+                     colors = colors[[1]], labels = list("Strain 1 (original)"))
+ax <- plot_quantiles(df_quantiles, columns = c("I2_total"),
+                     colors = colors[[2]], labels = list("Strain 2 (more transmissible)"), ax = ax)
+
+# Mark emergence date
+ax$axvline("2025-02-01", color = "red", linestyle = "--", alpha = 0.5, label = "Strain 2 emerges")
+
+ax$set_title("Two-Strain Dynamics: Emergence of a More Transmissible Variant")
+ax$set_ylabel("Infected")
+ax$legend()
+ax
+```
+
+---
+
+## Task 4: Experiments
+
+### Experiment A: Effect of Emergence Timing
+
+```{r experiment-timing}
+run_with_emergence_day <- function(emergence_day) {
+  m <- create_two_strain_model(psi = 1.5, gamma_val = 0.4)
+
+  emergence_date <- as.character(as.Date("2025-01-01") + emergence_day)
+
+  m$override_parameter(
+    start_date = "2025-01-01", end_date = emergence_date,
+    parameter_name = "psi", value = 0.0
+  )
+  m$override_parameter(
+    start_date = "2025-01-01", end_date = emergence_date,
+    parameter_name = "mu2", value = 0.0
+  )
+
+  Nk_val <- py_to_r(m$population$Nk)
+  ic <- reticulate::dict(
+    S = np$array(as.integer(Nk_val - 20)),
+    I1 = np$array(as.integer(10)),
+    I2 = np$array(as.integer(10)),
+    R1 = np$array(as.integer(0)),
+    R2 = np$array(as.integer(0))
+  )
+
+  res <- m$run_simulations(
+    start_date = "2025-01-01", end_date = "2025-07-31",
+    Nsim = 50L, initial_conditions_dict = ic
+  )
+
+  list(results = res, emergence_date = emergence_date)
+}
+
+# Run with different emergence times
+res_early <- run_with_emergence_day(15)
+res_mid <- run_with_emergence_day(30)
+res_late <- run_with_emergence_day(45)
+```
+
+```{r viz-early}
+# Early emergence
+df <- res_early$results$get_quantiles_compartments()
+ax <- plot_quantiles(df, columns = c("I1_total"), colors = colors[[1]], labels = list("Strain 1"))
+ax <- plot_quantiles(df, columns = c("I2_total"), colors = colors[[2]], labels = list("Strain 2"), ax = ax)
+ax$axvline(res_early$emergence_date, color = "red", linestyle = "--", alpha = 0.5)
+ax$set_title("Early emergence (day 15)")
+ax$legend()
+ax
+```
+
+```{r viz-late}
+# Late emergence
+df <- res_late$results$get_quantiles_compartments()
+ax <- plot_quantiles(df, columns = c("I1_total"), colors = colors[[1]], labels = list("Strain 1"))
+ax <- plot_quantiles(df, columns = c("I2_total"), colors = colors[[2]], labels = list("Strain 2"), ax = ax)
+ax$axvline(res_late$emergence_date, color = "red", linestyle = "--", alpha = 0.5)
+ax$set_title("Late emergence (day 45)")
+ax$legend()
+ax
+```
+
+### Experiment B: Effect of Transmissibility Advantage
+
+```{r experiment-psi}
+run_with_psi <- function(psi_value) {
+  m <- create_two_strain_model(psi = psi_value, gamma_val = 0.4)
+
+  m$override_parameter(
+    start_date = "2025-01-01", end_date = "2025-01-31",
+    parameter_name = "psi", value = 0.0
+  )
+  m$override_parameter(
+    start_date = "2025-01-01", end_date = "2025-01-31",
+    parameter_name = "mu2", value = 0.0
+  )
+
+  Nk_val <- py_to_r(m$population$Nk)
+  ic <- reticulate::dict(
+    S = np$array(as.integer(Nk_val - 20)),
+    I1 = np$array(as.integer(10)),
+    I2 = np$array(as.integer(10)),
+    R1 = np$array(as.integer(0)),
+    R2 = np$array(as.integer(0))
+  )
+
+  m$run_simulations(
+    start_date = "2025-01-01", end_date = "2025-07-31",
+    Nsim = 50L, initial_conditions_dict = ic
+  )
+}
+
+results_psi_low <- run_with_psi(1.2)
+results_psi_mid <- run_with_psi(1.5)
+results_psi_high <- run_with_psi(2.0)
+```
+
+```{r viz-psi-low}
+df <- results_psi_low$get_quantiles_compartments()
+ax <- plot_quantiles(df, columns = c("I1_total"), colors = colors[[1]], labels = list("Strain 1"))
+ax <- plot_quantiles(df, columns = c("I2_total"), colors = colors[[2]], labels = list("Strain 2"), ax = ax)
+ax$axvline("2025-02-01", color = "red", linestyle = "--", alpha = 0.5)
+ax$set_title("psi = 1.2 (20% advantage)")
+ax$legend()
+ax
+```
+
+```{r viz-psi-high}
+df <- results_psi_high$get_quantiles_compartments()
+ax <- plot_quantiles(df, columns = c("I1_total"), colors = colors[[1]], labels = list("Strain 1"))
+ax <- plot_quantiles(df, columns = c("I2_total"), colors = colors[[2]], labels = list("Strain 2"), ax = ax)
+ax$axvline("2025-02-01", color = "red", linestyle = "--", alpha = 0.5)
+ax$set_title("psi = 2.0 (100% advantage)")
+ax$legend()
+ax
+```
+
+### Compute Dominance Day
+
+```{r compute-dominance}
+compute_dominance_day <- function(results) {
+  traj <- results$get_stacked_compartments()
+  I1_median <- apply(py_to_r(traj["I1_total"]), 2, median)
+  I2_median <- apply(py_to_r(traj["I2_total"]), 2, median)
+
+  crossover <- which(I2_median > I1_median & I2_median > 100)
+  if (length(crossover) > 0) return(crossover[1])
+  return(NA)
+}
+
+cat("Days until strain 2 dominance:\n")
+cat(sprintf("  psi = 1.2: Day %s\n", compute_dominance_day(results_psi_low)))
+cat(sprintf("  psi = 1.5: Day %s\n", compute_dominance_day(results_psi_mid)))
+cat(sprintf("  psi = 2.0: Day %s\n", compute_dominance_day(results_psi_high)))
+```
+
+---
+
+## Discussion
+
+**Key observations:**
+
+1. **Emergence timing matters:** Early emergence allows strain 2 to take over quickly
+   before strain 1 depletes susceptibles. Late emergence means fewer susceptibles remain,
+   but strain 2 can still spread among R1 individuals (reinfection).
+
+2. **Transmissibility advantage (psi):** Higher psi leads to faster strain replacement.
+   Even modest advantages (20%) lead to eventual dominance.
+
+3. **Cross-immunity (gamma):** gamma = 0.4 means R1 individuals have 60% protection
+   against strain 2. This slows but doesn't prevent spread.
+
+**Real-world implications:**
+
+- Early detection of new variants is crucial for pandemic response
+- Even small transmissibility advantages compound through exponential growth
+- Vaccines providing cross-variant protection can slow variant emergence

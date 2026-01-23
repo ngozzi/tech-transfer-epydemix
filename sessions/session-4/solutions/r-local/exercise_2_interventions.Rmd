@@ -1,0 +1,259 @@
+---
+title: "Exercise 2 Solution: Comparing Intervention Strategies"
+subtitle: "Session 4 - Exercise Solutions"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Prerequisites
+
+```{r load-reticulate}
+library(reticulate)
+library(ggplot2)
+library(tibble)
+
+# Option A: Use a conda environment
+# use_condaenv("epydemix-workshop")
+
+# Option B: Use system Python
+# use_python("/usr/bin/python3")
+
+# Import epydemix
+epydemix <- import("epydemix")
+EpiModel <- epydemix$EpiModel
+builtins <- import_builtins()
+viz <- import("epydemix.visualization")
+plot_quantiles <- viz$plot_quantiles
+```
+
+---
+
+## Setup: Create Base SEIR Model
+
+```{r load-population}
+# Load US population data
+load_epydemix_population <- epydemix$population$load_epydemix_population
+population <- load_epydemix_population("United_States")
+
+# Helper function to create a fresh SEIR model
+create_seir_model <- function() {
+  m <- EpiModel(name = "SEIR", compartments = c("S", "E", "I", "R"))
+
+  params_SE <- builtins$tuple(list("beta", "I"))
+  m$add_transition(source = "S", target = "E", params = params_SE, kind = "mediated")
+  m$add_transition(source = "E", target = "I", params = "sigma", kind = "spontaneous")
+  m$add_transition(source = "I", target = "R", params = "gamma", kind = "spontaneous")
+
+  m$add_parameter("beta", 0.035)
+  m$add_parameter("sigma", 0.2)
+  m$add_parameter("gamma", 0.1)
+
+  m$set_population(population)
+  return(m)
+}
+```
+
+---
+
+## Tasks 1 & 2: Implement Intervention Scenarios
+
+```{r create-scenarios}
+# Create four models: baseline + three interventions
+model_baseline <- create_seir_model()
+model_school <- create_seir_model()
+model_work <- create_seir_model()
+model_combined <- create_seir_model()
+
+# Scenario 1: School closure only (80% reduction, Apr 1 - Jun 30)
+model_school$add_intervention(
+  layer_name = "school",
+  start_date = "2026-04-01",
+  end_date = "2026-06-30",
+  reduction_factor = 0.2,  # 80% reduction
+  name = "school closure"
+)
+
+# Scenario 2: Work-from-home only (60% reduction, Apr 1 - Aug 31)
+model_work$add_intervention(
+  layer_name = "work",
+  start_date = "2026-04-01",
+  end_date = "2026-08-31",
+  reduction_factor = 0.4,  # 60% reduction
+  name = "work from home"
+)
+
+# Scenario 3: Combined but lighter (40% reduction in both, Apr 1 - May 31)
+model_combined$add_intervention(
+  layer_name = "school",
+  start_date = "2026-04-01",
+  end_date = "2026-05-31",
+  reduction_factor = 0.6,  # 40% reduction
+  name = "partial school closure"
+)
+model_combined$add_intervention(
+  layer_name = "work",
+  start_date = "2026-04-01",
+  end_date = "2026-05-31",
+  reduction_factor = 0.6,  # 40% reduction
+  name = "partial work from home"
+)
+```
+
+```{r run-simulations}
+# Simulation parameters
+Nk_r <- py_to_r(population$Nk)
+pct <- 10 / sum(Nk_r)
+
+cat("Running baseline...\n")
+results_baseline <- model_baseline$run_simulations(
+  start_date = "2026-03-01", end_date = "2026-12-31",
+  Nsim = 50L, percentage_in_agents = pct
+)
+
+cat("Running school closure...\n")
+results_school <- model_school$run_simulations(
+  start_date = "2026-03-01", end_date = "2026-12-31",
+  Nsim = 50L, percentage_in_agents = pct
+)
+
+cat("Running work-from-home...\n")
+results_work <- model_work$run_simulations(
+  start_date = "2026-03-01", end_date = "2026-12-31",
+  Nsim = 50L, percentage_in_agents = pct
+)
+
+cat("Running combined...\n")
+results_combined <- model_combined$run_simulations(
+  start_date = "2026-03-01", end_date = "2026-12-31",
+  Nsim = 50L, percentage_in_agents = pct
+)
+
+cat("Done!\n")
+```
+
+---
+
+## Task 3: Compare Metrics
+
+```{r compute-metrics}
+compute_metrics <- function(results) {
+  traj <- results$get_stacked_compartments()
+
+  peak <- py_to_r(traj["I_total"]$max(axis = 1L))
+  total <- py_to_r(traj["R_total"][, -1L])
+  time_to_peak <- py_to_r(traj["I_total"]$argmax(axis = 1L))
+
+  list(peak = peak, total = total, time_to_peak = time_to_peak)
+}
+
+metrics_baseline <- compute_metrics(results_baseline)
+metrics_school <- compute_metrics(results_school)
+metrics_work <- compute_metrics(results_work)
+metrics_combined <- compute_metrics(results_combined)
+
+# Print summary
+baseline_peak <- median(metrics_baseline$peak)
+baseline_total <- median(metrics_baseline$total)
+
+cat(sprintf("%-20s %15s %15s %15s\n", "Scenario", "Peak (M)", "Total (M)", "Time to Peak"))
+cat(sprintf("%-20s %15.1f %15.1f %15.0f\n", "Baseline",
+            median(metrics_baseline$peak)/1e6, median(metrics_baseline$total)/1e6, median(metrics_baseline$time_to_peak)))
+cat(sprintf("%-20s %15.1f %15.1f %15.0f\n", "School Closure",
+            median(metrics_school$peak)/1e6, median(metrics_school$total)/1e6, median(metrics_school$time_to_peak)))
+cat(sprintf("%-20s %15.1f %15.1f %15.0f\n", "Work-from-Home",
+            median(metrics_work$peak)/1e6, median(metrics_work$total)/1e6, median(metrics_work$time_to_peak)))
+cat(sprintf("%-20s %15.1f %15.1f %15.0f\n", "Combined (lighter)",
+            median(metrics_combined$peak)/1e6, median(metrics_combined$total)/1e6, median(metrics_combined$time_to_peak)))
+```
+
+---
+
+## Task 4: Summary Visualization
+
+```{r viz-comparison}
+# Get quantiles for each scenario
+df_baseline <- results_baseline$get_quantiles_compartments()
+df_school <- results_school$get_quantiles_compartments()
+df_work <- results_work$get_quantiles_compartments()
+df_combined <- results_combined$get_quantiles_compartments()
+
+# Plot comparison
+ax <- plot_quantiles(df_baseline, columns = c("I_total"),
+                     colors = "gray", labels = "Baseline (no intervention)")
+ax <- plot_quantiles(df_school, columns = c("I_total"),
+                     colors = "blue", labels = "School closure (80%, Apr-Jun)", ax = ax)
+ax <- plot_quantiles(df_work, columns = c("I_total"),
+                     colors = "orange", labels = "Work-from-home (60%, Apr-Aug)", ax = ax)
+ax <- plot_quantiles(df_combined, columns = c("I_total"),
+                     colors = "green", labels = "Combined lighter (40%, Apr-May)", ax = ax)
+
+ax$set_title("Comparison of Intervention Strategies")
+ax$set_ylabel("Infected")
+ax$legend(loc = "upper right")
+ax
+```
+
+```{r viz-boxplot, fig.width=10, fig.height=4}
+# Build data frame for boxplot comparison
+df_metrics <- tibble(
+  metric = c(
+    rep("Peak Infections (M)", 4 * length(metrics_baseline$peak)),
+    rep("Time to Peak (days)", 4 * length(metrics_baseline$time_to_peak))
+  ),
+  scenario = c(
+    rep("Baseline", length(metrics_baseline$peak)),
+    rep("School", length(metrics_school$peak)),
+    rep("Work", length(metrics_work$peak)),
+    rep("Combined", length(metrics_combined$peak)),
+    rep("Baseline", length(metrics_baseline$time_to_peak)),
+    rep("School", length(metrics_school$time_to_peak)),
+    rep("Work", length(metrics_work$time_to_peak)),
+    rep("Combined", length(metrics_combined$time_to_peak))
+  ),
+  value = c(
+    metrics_baseline$peak/1e6, metrics_school$peak/1e6,
+    metrics_work$peak/1e6, metrics_combined$peak/1e6,
+    metrics_baseline$time_to_peak, metrics_school$time_to_peak,
+    metrics_work$time_to_peak, metrics_combined$time_to_peak
+  )
+)
+
+ggplot(df_metrics, aes(x = scenario, y = value, fill = scenario)) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~metric, scales = "free_y") +
+  labs(x = NULL, y = NULL, title = "Intervention Comparison") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Baseline" = "gray", "School" = "blue",
+                               "Work" = "orange", "Combined" = "green"))
+```
+
+---
+
+## Discussion
+
+**Which strategy is most effective?**
+
+1. **Work-from-home (60%, Apr-Aug)** typically shows the best performance because working
+   adults have the highest contact rates and the longer duration provides sustained protection.
+
+2. **School closure (80%, Apr-Jun)** is intense but shorter, with limited impact on
+   adult-to-adult transmission.
+
+3. **Combined lighter (40%, Apr-May)** affects multiple routes but the shortest duration
+   limits overall impact.
+
+**Key trade-offs:**
+
+| Factor | School Closure | Work-from-Home | Combined Lighter |
+|--------|---------------|----------------|------------------|
+| Economic impact | Lower | Higher | Moderate |
+| Sustainability | Short-term only | More sustainable | Most sustainable |
+| Effectiveness | Age-targeted | Broad | Moderate |
