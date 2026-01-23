@@ -128,16 +128,15 @@ Where $\rho(C)$ is the spectral radius of the contact matrix $C$.
 ```{r compute-r0}
 # Get overall contact matrix as sum of individual matrices
 contact_matrices <- model$population$contact_matrices
-matrix_list <- py_to_r(contact_matrices$values())
-C <- Reduce(`+`, lapply(matrix_list, py_to_r))
+C <- contact_matrices$school + contact_matrices$home + contact_matrices$work + contact_matrices$community
 
 # Compute spectral radius (largest eigenvalue)
 eigenvalues <- eigen(C)$values
 rho <- max(Re(eigenvalues))
 
 # Compute R0
-beta <- py_to_r(model$parameters["beta"])
-gamma <- py_to_r(model$parameters["gamma"])
+beta <- as.numeric(model$parameters["beta"])
+gamma <- as.numeric(model$parameters["gamma"])
 R0 <- beta / gamma * rho
 
 cat(sprintf("R0: %.2f\n", R0))
@@ -318,32 +317,54 @@ ax
 ### Quantifying Impact
 
 ```{r compute-impact}
+%%R
+# Get full trajectories
 traj_baseline <- results_baseline$get_stacked_compartments()
 traj_contact <- results_contact$get_stacked_compartments()
 traj_transmission <- results_transmission$get_stacked_compartments()
 
 # Total infections (final R count)
-total_baseline <- py_to_r(traj_baseline["R_total"][, -1L])
-total_contact <- py_to_r(traj_contact["R_total"][, -1L])
-total_transmission <- py_to_r(traj_transmission["R_total"][, -1L])
+R_baseline <- py_to_r(traj_baseline["R_total"])$R_total
+R_contact <- py_to_r(traj_contact["R_total"])$R_total
+R_transmission <- py_to_r(traj_transmission["R_total"])$R_total
+total_baseline <- R_baseline[, ncol(R_baseline)]
+total_contact <- R_contact[, ncol(R_contact)]
+total_transmission <- R_transmission[, ncol(R_transmission)]
 
 averted_contact <- (total_baseline - total_contact) / total_baseline * 100
 averted_transmission <- (total_baseline - total_transmission) / total_baseline * 100
 
 # Peak infections
-peak_baseline <- py_to_r(traj_baseline["I_total"]$max(axis = 1L))
-peak_contact <- py_to_r(traj_contact["I_total"]$max(axis = 1L))
-peak_transmission <- py_to_r(traj_transmission["I_total"]$max(axis = 1L))
+I_baseline <- py_to_r(traj_baseline["I_total"])$I_total
+I_contact <- py_to_r(traj_contact["I_total"])$I_total
+I_transmission <- py_to_r(traj_transmission["I_total"])$I_total
+peak_baseline <- apply(I_baseline, 1, max)
+peak_contact <- apply(I_contact, 1, max)
+peak_transmission <- apply(I_transmission, 1, max)
 
 peak_reduction_contact <- (peak_baseline - peak_contact) / peak_baseline * 100
 peak_reduction_transmission <- (peak_baseline - peak_transmission) / peak_baseline * 100
 
+# Print results
 cat("Contact intervention (school + work):\n")
-cat(sprintf("  Infections averted: %.1f%%\n", median(averted_contact)))
-cat(sprintf("  Peak reduction: %.1f%%\n", median(peak_reduction_contact)))
+cat(sprintf("  Infections averted: %.1f%% (IQR: %.1f–%.1f%%)\n",
+            median(averted_contact),
+            quantile(averted_contact, 0.25),
+            quantile(averted_contact, 0.75)))
+cat(sprintf("  Peak reduction: %.1f%% (IQR: %.1f–%.1f%%)\n",
+            median(peak_reduction_contact),
+            quantile(peak_reduction_contact, 0.25),
+            quantile(peak_reduction_contact, 0.75)))
+
 cat("\nTransmission reduction (masking):\n")
-cat(sprintf("  Infections averted: %.1f%%\n", median(averted_transmission)))
-cat(sprintf("  Peak reduction: %.1f%%\n", median(peak_reduction_transmission)))
+cat(sprintf("  Infections averted: %.1f%% (IQR: %.1f–%.1f%%)\n",
+            median(averted_transmission),
+            quantile(averted_transmission, 0.25),
+            quantile(averted_transmission, 0.75)))
+cat(sprintf("  Peak reduction: %.1f%% (IQR: %.1f–%.1f%%)\n",
+            median(peak_reduction_transmission),
+            quantile(peak_reduction_transmission, 0.25),
+            quantile(peak_reduction_transmission, 0.75)))
 ```
 
 ```{r viz-impact, fig.width=10, fig.height=4}

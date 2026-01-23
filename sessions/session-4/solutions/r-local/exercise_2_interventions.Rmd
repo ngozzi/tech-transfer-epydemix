@@ -147,9 +147,11 @@ cat("Done!\n")
 compute_metrics <- function(results) {
   traj <- results$get_stacked_compartments()
 
-  peak <- py_to_r(traj["I_total"]$max(axis = 1L))
-  total <- py_to_r(traj["R_total"][, -1L])
-  time_to_peak <- py_to_r(traj["I_total"]$argmax(axis = 1L))
+  I_mat <- py_to_r(traj["I_total"])
+  R_mat <- py_to_r(traj["R_total"])
+  peak <- apply(I_mat, 1, max)
+  total <- R_mat[, ncol(R_mat)]
+  time_to_peak <- apply(I_mat, 1, which.max)
 
   list(peak = peak, total = total, time_to_peak = time_to_peak)
 }
