@@ -44,7 +44,13 @@ model.add_transition(source="R", target="S", params="omega", kind="spontaneous")
 
 ---
 
-## Exercise 2: Comparing Intervention Strategies
+## Exercise 2: Comparing Intervention Strategies 
+
+| | Template | Solution |
+|---|---|---|
+| Python | [exercise_2_interventions.ipynb](exercises/python/exercise_2_interventions.ipynb) | [exercise_2_interventions.ipynb](solutions/python/exercise_2_interventions.ipynb) |
+| R (Colab) | [exercise_2_interventions.ipynb](exercises/r-colab/exercise_2_interventions.ipynb) | [exercise_2_interventions.ipynb](solutions/r-colab/exercise_2_interventions.ipynb) |
+| R (Local) | [exercise_2_interventions.Rmd](exercises/r-local/exercise_2_interventions.Rmd) | [exercise_2_interventions.Rmd](solutions/r-local/exercise_2_interventions.Rmd) |
 
 **Objective:** Design and compare three different intervention strategies for controlling an outbreak.
 

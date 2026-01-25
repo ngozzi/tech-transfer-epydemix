@@ -17,14 +17,9 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 ```{r load-reticulate}
 library(reticulate)
+py_require("epydemix")
 library(ggplot2)
 library(tibble)
-
-# Option A: Use a conda environment
-# use_condaenv("epydemix-workshop")
-
-# Option B: Use system Python
-# use_python("/usr/bin/python3")
 
 # Import epydemix
 epydemix <- import("epydemix")
@@ -147,8 +142,8 @@ cat("Done!\n")
 compute_metrics <- function(results) {
   traj <- results$get_stacked_compartments()
 
-  I_mat <- py_to_r(traj["I_total"])
-  R_mat <- py_to_r(traj["R_total"])
+  I_mat <- py_to_r(traj["I_total"])$I_total
+  R_mat <- py_to_r(traj["R_total"])$R_total
   peak <- apply(I_mat, 1, max)
   total <- R_mat[, ncol(R_mat)]
   time_to_peak <- apply(I_mat, 1, which.max)
@@ -181,6 +176,8 @@ cat(sprintf("%-20s %15.1f %15.1f %15.0f\n", "Combined (lighter)",
 ## Task 4: Summary Visualization
 
 ```{r viz-comparison}
+plt <- import("matplotlib.pyplot")
+
 # Get quantiles for each scenario
 df_baseline <- results_baseline$get_quantiles_compartments()
 df_school <- results_school$get_quantiles_compartments()
@@ -200,7 +197,7 @@ ax <- plot_quantiles(df_combined, columns = c("I_total"),
 ax$set_title("Comparison of Intervention Strategies")
 ax$set_ylabel("Infected")
 ax$legend(loc = "upper right")
-ax
+plt$show()
 ```
 
 ```{r viz-boxplot, fig.width=10, fig.height=4}

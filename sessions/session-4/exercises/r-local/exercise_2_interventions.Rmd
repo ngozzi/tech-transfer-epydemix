@@ -1,0 +1,194 @@
+---
+title: "Exercise 2: Comparing Intervention Strategies"
+subtitle: "Session 4 - Exercises"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Objective
+
+Design and compare three different intervention strategies for controlling an outbreak.
+
+**Skills practiced:**
+
+- Using `add_intervention` for contact reductions
+- Using `override_parameter` for transmission changes
+- Quantifying intervention impact
+
+## Prerequisites
+
+```{r load-reticulate}
+library(reticulate)
+py_require("epydemix")
+library(ggplot2)
+library(tibble)
+
+# Import epydemix
+epydemix <- import("epydemix")
+EpiModel <- epydemix$EpiModel
+builtins <- import_builtins()
+viz <- import("epydemix.visualization")
+plot_quantiles <- viz$plot_quantiles
+```
+
+---
+
+## Setup: Create Base SEIR Model
+
+```{r load-population}
+# Load US population data
+load_epydemix_population <- epydemix$population$load_epydemix_population
+population <- load_epydemix_population("United_States")
+
+# Helper function to create a fresh SEIR model
+create_seir_model <- function() {
+  m <- EpiModel(name = "SEIR", compartments = c("S", "E", "I", "R"))
+
+  params_SE <- builtins$tuple(list("beta", "I"))
+  m$add_transition(source = "S", target = "E", params = params_SE, kind = "mediated")
+  m$add_transition(source = "E", target = "I", params = "sigma", kind = "spontaneous")
+  m$add_transition(source = "I", target = "R", params = "gamma", kind = "spontaneous")
+
+  m$add_parameter("beta", 0.035)
+  m$add_parameter("sigma", 0.2)
+  m$add_parameter("gamma", 0.1)
+
+  m$set_population(population)
+  return(m)
+}
+```
+
+---
+
+## Tasks 1 & 2: Implement Intervention Scenarios
+
+**Scenario:** An outbreak begins on March 1, 2026. Compare three intervention strategies:
+
+1. **School closure only:** 80% reduction in school contacts from April 1 to June 30
+2. **Work-from-home only:** 60% reduction in work contacts from April 1 to August 31
+3. **Combined but lighter:** 40% reduction in both school and work from April 1 to May 31
+
+**Hint:** Use `model$add_intervention(layer_name, start_date, end_date, reduction_factor, name)`
+
+- `reduction_factor = 0.2` means 80% reduction (only 20% of contacts remain)
+- `reduction_factor = 0.4` means 60% reduction
+- `reduction_factor = 0.6` means 40% reduction
+
+```{r create-scenarios}
+# Create four models: baseline + three interventions
+model_baseline <- create_seir_model()
+model_school <- create_seir_model()
+model_work <- create_seir_model()
+model_combined <- create_seir_model()
+
+# TODO: Scenario 1 - School closure only (80% reduction, Apr 1 - Jun 30)
+# model_school$add_intervention(...)
+
+# TODO: Scenario 2 - Work-from-home only (60% reduction, Apr 1 - Aug 31)
+# model_work$add_intervention(...)
+
+# TODO: Scenario 3 - Combined but lighter (40% reduction in both, Apr 1 - May 31)
+# model_combined$add_intervention(...)  # school
+# model_combined$add_intervention(...)  # work
+```
+
+```{r run-simulations}
+# Simulation parameters
+Nk_r <- py_to_r(population$Nk)
+pct <- 10 / sum(Nk_r)
+
+# TODO: Run all scenarios
+cat("Running baseline...\n")
+results_baseline <- ...
+
+cat("Running school closure...\n")
+results_school <- ...
+
+cat("Running work-from-home...\n")
+results_work <- ...
+
+cat("Running combined...\n")
+results_combined <- ...
+
+cat("Done!\n")
+```
+
+---
+
+## Task 3: Compare Metrics
+
+Compare the scenarios using:
+
+- Peak infection size
+- Total infections (final R count)
+- Time to peak
+
+```{r compute-metrics}
+# Helper function to compute metrics
+compute_metrics <- function(results) {
+  traj <- results$get_stacked_compartments()
+
+  I_mat <- py_to_r(traj["I_total"])$I_total
+  R_mat <- py_to_r(traj["R_total"])$R_total
+  peak <- apply(I_mat, 1, max)
+  total <- R_mat[, ncol(R_mat)]
+  time_to_peak <- apply(I_mat, 1, which.max)
+
+  list(peak = peak, total = total, time_to_peak = time_to_peak)
+}
+
+# TODO: Compute metrics for all scenarios
+metrics_baseline <- ...
+metrics_school <- ...
+metrics_work <- ...
+metrics_combined <- ...
+
+# TODO: Print summary table comparing all scenarios
+```
+
+---
+
+## Task 4: Summary Visualization
+
+```{r viz-comparison}
+plt <- import("matplotlib.pyplot")
+
+# TODO: Get quantiles for each scenario
+df_baseline <- ...
+df_school <- ...
+df_work <- ...
+df_combined <- ...
+
+# TODO: Plot comparison using plot_quantiles
+# Use the ax parameter to overlay plots on the same axes
+```
+
+```{r viz-boxplot, fig.width=10, fig.height=4}
+# TODO: Create boxplot comparison using ggplot2
+# Build a data frame with metrics from all scenarios
+# Create faceted boxplots for peak infections and time to peak
+```
+
+---
+
+## Discussion
+
+**Which strategy is most effective? What trade-offs exist between intervention intensity and duration?**
+
+*Write your observations here:*
+
+1. Which intervention reduced peak infections the most?
+
+2. Which intervention reduced total infections the most?
+
+3. How did interventions affect the timing of the peak?
+
+4. What real-world trade-offs (economic, social) should be considered when choosing between these strategies?
